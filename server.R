@@ -1,82 +1,47 @@
-#######################################
-##### custom HTML output - server.R ###
-#######################################
-
 library(shiny)
-library(ggplot2)
+library(plyr)
+#library(ggplot2)
 
-# load the data- keeping strings as strings
 
-PO <- read.csv("PO.csv", stringsAsFactors = FALSE)
+  #load data
 
-# create a new variable to hold the area in and fill with blanks
-
-PO$Area <- NA
-
-# find posts that match service codes and label them with the correct names
-
-PO$Area[grep("RHARY", PO$HealthServices, ignore.case=TRUE)] <- "Armadillo"
-
-PO$Area[grep("RHAAR", PO$HealthServices, ignore.case=TRUE)] <- "Baboon"
-
-PO$Area[grep("715", PO$HealthServices, ignore.case=TRUE)] <- "Camel"
-
-PO$Area[grep("710i", PO$HealthServices, ignore.case=TRUE)] <- "Deer"
-
-PO$Area[grep("700", PO$HealthServices, ignore.case=TRUE)] <- "Elephant"
-
-# create a postings variable to add together for a cumulative sum- give it 1
-
-PO$ToAdd <- 1
-
-# remove all missing values for Area (since they will never be shown)
-
-PO <- PO[!is.na(PO$Area),]
-
-# API returns data in reverse chronological order- reverse it
-
-PO <- PO[nrow(PO):1,]
-
-# produce cumulative sum column
-
-PO$Sum <- ave(PO$ToAdd, PO$Area, FUN = cumsum)
-
-# produce a date column from the data column in the spreadsheet
-
-PO$Date <- as.Date(substr(PO$dtSubmitted, 1, 10), format = "%Y-%m-%d")
-
-# define Shiny
-
-shinyServer(function(input, output) { 
+#resume<-readLines(file("C:/Users/komei/Desktop/resume1611utf.csv",encoding="UTF-8"))
+  resume <- read.csv("resume1611.csv", stringsAsFactors = F) 
+  colnames(resume) <-c("machineNum","happenTime","timing","condition","conditionG","生產狀態","工號","累積生產數","生產數","巡機員","error")
   
-  output$plotDisplay <- renderPlot({
-    
-    # select only the area as selected in the UI
-    
-    toPlot = PO[PO$Area == input$area,]
-    
-    print(
-      ggplot(toPlot, aes(x = Date, y = Sum)) + geom_line()
-    )
-    
-  })
+  #heat_map前處理
+  abc <-ddply(resume,.(machineNum,error),transform, count = length(error))
+  resumeHeat<- unique(abc[c("machineNum", "error","count")])
   
-  output$outputLink <- renderText({
+  #pie前處理
+  resume1 <-subset(resume, conditionG != "關機"&conditionG != "開機準備"&conditionG != "關機準備")
+  condiG<-count(resume1$conditionG)
+  condiG$x=as.character(condiG$x)
+  condiG$freq=as.numeric(condiG$freq)
+  
+    shinyServer(function(input, output) {
+    countErr<- reactive({less<-subset(resume, timing < input$timing & condition =="異常" & conditionG =="異常")
+                        countErr <-count(less$error)
+                        countErr$rank <- NA
+                        order.freq <- order(countErr$freq, countErr$x, decreasing = T)
+                        countErr$rank[order.freq]<- 1:nrow(countErr)
+                        countErr=as.data.frame(countErr)
+                    })
     
-    # switch command in R as in many other programming languages
+
+    output$bar<-renderPlot({
+      ggplot(countErr(), aes(x=reorder(x,-freq), y=freq))+geom_bar(stat="identity", data = subset(countErr(), rank <= input$num))+ xlab("Error") + ylab("count")
+    })
+    output$heat_map <-renderPlot({
+      ggplot(resumeHeat,aes(x=machineNum,y=error,fill=count))+geom_raster()+scale_fill_gradient(limits=c(0,50))+theme(axis.text.x = element_text(angle=60, hjust=1, vjust=1))
     
-    link <- switch(input$area,
-                   "Armadillo" = "http://www.patientopinion.org.uk/services/rhary",
-                   "Baboon" = "http://www.patientopinion.org.uk/services/rhaar",
-                   "Camel" = "http://www.patientopinion.org.uk/services/rha_715",
-                   "Deer" = "http://www.patientopinion.org.uk/services/rha_710i",
-                   "Elephant" = "http://www.patientopinion.org.uk/services/rha_700"
-    )
+      })
+    output$pie <- renderPlot({
+      ggplot(data=condiG) +
+        geom_bar(aes(x=factor(1), y=freq,fill=x), stat = "identity") +coord_polar("y", start=0)+scale_fill_discrete(labels=c("水電問題","未排程","生產","其它","待品保","待研發","待料","待模具","借機","異常","設備故障","換型號","調機")
+        )
+    })
     
-    # paste the HTML together
-    
-    paste0('<form action="', link, '"target="_blank">
-             <input type="submit" value="Go to main site">
-             </form>')
-  })
+
 })
+  
